@@ -22,35 +22,22 @@ def train(input_tensor, target_tensor, encoder, decoder, encoder_optimizer, deco
     loss = 0
 
     for ei in range(input_length):
-        encoder_output, encoder_hidden = encoder(
-            input_tensor[ei], encoder_hidden)
+        encoder_output, encoder_hidden = encoder(input_tensor[ei], encoder_hidden)
         encoder_outputs[ei] = encoder_output[0, 0]
 
     decoder_input = torch.tensor([[SOS_token]], device=device)
 
     decoder_hidden = encoder_hidden
 
-    use_teacher_forcing = True if random.random() < teacher_forcing_ratio else False
+    for di in range(target_length):
+        decoder_output, decoder_hidden, decoder_attention = decoder(
+            decoder_input, decoder_hidden, encoder_outputs)
+        topv, topi = decoder_output.topk(1)
+        decoder_input = topi.squeeze().detach()  # 입력으로 사용할 부분을 히스토리에서 분리
 
-    if use_teacher_forcing:
-        # Teacher forcing 포함: 목표를 다음 입력으로 전달
-        for di in range(target_length):
-            decoder_output, decoder_hidden, decoder_attention = decoder(
-                decoder_input, decoder_hidden, encoder_outputs)
-            loss += criterion(decoder_output, target_tensor[di])
-            decoder_input = target_tensor[di]  # Teacher forcing
-
-    else:
-        # Teacher forcing 미포함: 자신의 예측을 다음 입력으로 사용
-        for di in range(target_length):
-            decoder_output, decoder_hidden, decoder_attention = decoder(
-                decoder_input, decoder_hidden, encoder_outputs)
-            topv, topi = decoder_output.topk(1)
-            decoder_input = topi.squeeze().detach()  # 입력으로 사용할 부분을 히스토리에서 분리
-
-            loss += criterion(decoder_output, target_tensor[di])
-            if decoder_input.item() == EOS_token:
-                break
+        loss += criterion(decoder_output, target_tensor[di])
+        if decoder_input.item() == EOS_token:
+            break
 
     loss.backward()
 
@@ -59,9 +46,40 @@ def train(input_tensor, target_tensor, encoder, decoder, encoder_optimizer, deco
 
     return loss.item() / target_length
 
-def evaluate(encoder, decoder, sentence, input_lang, output_lang, max_length=MAX_LENGTH):
+def trainIters(encoder, decoder, encoder_optimizer, decoder_optimizer, n_iters, grouped, lang, print_every=1000, plot_every=100):
+    start = time.time()
+    plot_losses = []
+    print_loss_total = 0  # print_every 마다 초기화
+    plot_loss_total = 0  # plot_every 마다 초기화
+
+    training_pairs = [tensorsFromPair(random.choice(grouped), lang) for i in range(n_iters)]
+    criterion = nn.NLLLoss()
+
+    for iter in range(1, n_iters + 1):
+        training_pair = training_pairs[iter - 1]
+        input_tensor = training_pair[0]
+        target_tensor = training_pair[1]
+
+        loss = train(input_tensor, target_tensor, encoder, decoder, encoder_optimizer, decoder_optimizer, criterion)
+        print_loss_total += loss
+        plot_loss_total += loss
+
+        if iter % print_every == 0:
+            print_loss_avg = print_loss_total / print_every
+            print_loss_total = 0
+            print('%s (%d %d%%) %.4f' % (timeSince(start, iter / n_iters),
+                                         iter, iter / n_iters * 100, print_loss_avg))
+
+        if iter % plot_every == 0:
+            plot_loss_avg = plot_loss_total / plot_every
+            plot_losses.append(plot_loss_avg)
+            plot_loss_total = 0
+
+    showPlot(plot_losses)
+
+def evaluate(encoder, decoder, sentence, lang, max_length=MAX_LENGTH):
     with torch.no_grad():
-        input_tensor = tensorFromSentence(input_lang, sentence)
+        input_tensor = tensorFromSentence(lang, sentence)
         input_length = input_tensor.size()[0]
         encoder_hidden = encoder.initHidden()
 
@@ -88,55 +106,48 @@ def evaluate(encoder, decoder, sentence, input_lang, output_lang, max_length=MAX
                 decoded_words.append('<EOS>')
                 break
             else:
-                decoded_words.append(output_lang.index2word[topi.item()])
+                decoded_words.append(lang.index2word[topi.item()])
 
             decoder_input = topi.squeeze().detach()
 
         return decoded_words, decoder_attentions[:di + 1]
 
-
-def trainIters(encoder, decoder, n_iters, pairs, lang, print_every=1000, plot_every=100, learning_rate=0.01):
-    start = time.time()
-    plot_losses = []
-    print_loss_total = 0  # print_every 마다 초기화
-    plot_loss_total = 0  # plot_every 마다 초기화
-
-    encoder_optimizer = optim.SGD(encoder.parameters(), lr=learning_rate)
-    decoder_optimizer = optim.SGD(decoder.parameters(), lr=learning_rate)
-    training_pairs = [tensorsFromPair(random.choice(pairs), lang) for i in range(n_iters)]
-    criterion = nn.NLLLoss()
-
-    for iter in range(1, n_iters + 1):
-        training_pair = training_pairs[iter - 1]
-        input_tensor = training_pair[0]
-        target_tensor = training_pair[1]
-
-        loss = train(input_tensor, target_tensor, encoder,
-                     decoder, encoder_optimizer, decoder_optimizer, criterion)
-        print_loss_total += loss
-        plot_loss_total += loss
-
-        if iter % print_every == 0:
-            print_loss_avg = print_loss_total / print_every
-            print_loss_total = 0
-            print('%s (%d %d%%) %.4f' % (timeSince(start, iter / n_iters),
-                                         iter, iter / n_iters * 100, print_loss_avg))
-
-        if iter % plot_every == 0:
-            plot_loss_avg = plot_loss_total / plot_every
-            plot_losses.append(plot_loss_avg)
-            plot_loss_total = 0
-
-    showPlot(plot_losses)
+def evaluateRandomly(encoder, decoder, grouped, n=10):
+    for i in range(n):
+        pair = random.choice(grouped)
+        print('>', pair[0])
+        print('=', pair[1])
+        output_words, attentions = evaluate(encoder, decoder, pair[0])
+        output_sentence = ' '.join(output_words)
+        print('<', output_sentence)
+        print('')
 
 
 def main():
-    lang, pairs, grouped = prepareData()
+    lang, pairs, grouped = prepareData("data/train.txt")
 
     hidden_size = 256
+    learning_rate = 0.01
+
     encoder1 = EncoderRNN(lang.n_words, hidden_size).to(device)
     attn_decoder1 = AttnDecoderRNN(hidden_size, lang.n_words, dropout_p=0.1).to(device)
+    encoder_optimizer = optim.SGD(encoder1.parameters(), lr=learning_rate)
+    decoder_optimizer = optim.SGD(attn_decoder1.parameters(), lr=learning_rate)
 
-    trainIters(encoder1, attn_decoder1, 75000, pairs, lang, print_every=5000)
+
+    trainIters(encoder1, attn_decoder1, encoder_optimizer, decoder_optimizer, 75000, grouped, lang, print_every=5000)
+
+
+    # 경로 지정
+    PATH = "entire_model.pt"
+
+    torch.save({
+        'encoder_state_dict': encoder1.state_dict(),
+        'decoder_state_dict': attn_decoder1.state_dict(),
+        'encoder_optimizer_state_dict': encoder_optimizer.state_dict(),
+        'decoder_optimizer_state_dict': decoder_optimizer.state_dict(),
+    }, PATH)
+
+
 
 main()

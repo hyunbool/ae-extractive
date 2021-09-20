@@ -56,11 +56,11 @@ def normalizeString(s):
     s = re.sub(r"[^a-zA-Z.!?]+", r" ", s)
     return s
 
-def readLangs():
+def readLangs(path):
     print("Reading lines...")
 
     # 파일을 읽고 줄로 분리
-    lines = open('data/data.txt', encoding='utf-8').\
+    lines = open(path, encoding='utf-8').\
         read().strip().split('\n')
 
     # 모든 줄을 쌍으로 분리하고 정규화
@@ -79,8 +79,8 @@ def filterPair(p):
 def filterPairs(pairs):
     return [pair for pair in pairs if filterPair(pair)]
 
-def prepareData():
-    lang, pairs = readLangs()
+def prepareData(path):
+    lang, pairs = readLangs(path)
     print("Read %s sentence pairs" % len(pairs))
     pairs = filterPairs(pairs)
     print("Trimmed to %s sentence pairs" % len(pairs))
@@ -92,7 +92,7 @@ def prepareData():
 
     half_sent = int(len(pairs) / 2)
 
-    grouped = [[pairs[2*i], pairs[2*i+1]] for i in range((half_sent))]
+    grouped = [[pairs[2*i][0], pairs[2*i+1][0]] for i in range((half_sent))]
     grouped = [[s, s] for s in grouped]
 
     return lang, pairs, grouped

@@ -22,8 +22,13 @@ def indexesFromSentence(lang, sentence):
 
 
 def tensorFromSentence(lang, sentence, EOS_token = 1):
-    indexes = indexesFromSentence(lang, sentence)
-    indexes.append(EOS_token)
+    sent = list()
+
+    for i in range(2):
+        indexes = indexesFromSentence(lang, sentence[i])
+        indexes.append(EOS_token)
+        sent.append(indexes)
+
     return torch.tensor(indexes, dtype=torch.long, device=device).view(-1, 1)
 
 
