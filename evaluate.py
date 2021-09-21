@@ -1,11 +1,9 @@
 from __future__ import unicode_literals, print_function, division
-from torch import optim
-import torch
+import random
 from model import *
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-PATH = "entire_model.pt"
 
-
+"""
 def evaluate(encoder, decoder, sentence, lang, max_length=MAX_LENGTH):
     with torch.no_grad():
         input_tensor = tensorFromSentence(lang, sentence)
@@ -50,34 +48,33 @@ def evaluateRandomly(encoder, decoder, grouped, lang, n=10):
         output_sentence = ' '.join(output_words)
         print('<', output_sentence)
         print('')
-
+"""
 
 def main():
-"""
     lang, pairs, grouped = prepareData("data/test.txt")
 
     hidden_size = 256
     learning_rate = 0.01
 
-    encoder1 = EncoderRNN(lang.n_words, hidden_size).to(device)
-    attn_decoder1 = AttnDecoderRNN(hidden_size, lang.n_words, dropout_p=0.1).to(device)
-    encoder_optimizer = optim.SGD(encoder1.parameters(), lr=learning_rate)
-    decoder_optimizer = optim.SGD(attn_decoder1.parameters(), lr=learning_rate)
 
-    checkpoint = torch.load(PATH)
-
-
-    #encoder1.load_state_dict(checkpoint['encoder_state_dict'])
-   # attn_decoder1.load_state_dict(checkpoint['decoder_state_dict'])
-    #encoder_optimizer.load_state_dict(checkpoint['encoder_optimizer_state_dict'])
-    #decoder_optimizer.load_state_dict(checkpoint['decoder_optimizer_state_dict'])
-
-    #evaluateRandomly(encoder1, attn_decoder1, grouped, lang)
-"""
     # 경로 지정
     PATH = "state_dict_model.pt"
 
-    model = Net()
-    model.load_state_dict(torch.load(PATH))
-    model.eval()
-    main()
+    model = torch.load(PATH)
+
+    training_pairs = [tensorsFromPair(random.choice(grouped), lang)]
+
+    start = time.time()
+    print_loss_total = 0  # print_every 마다 초기화
+
+
+    with torch.no_grad():
+        input_tensor = training_pairs[0][0]
+        target_tensor = training_pairs[0][1]
+
+        loss = model(input_tensor, target_tensor)
+        print_loss_total += loss
+
+        print('loss: ' , print_loss_total)
+
+main()

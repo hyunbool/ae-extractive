@@ -1,8 +1,6 @@
 from io import open
 import unicodedata
-import string
 import re
-import random
 
 SOS_token = 0
 EOS_token = 1

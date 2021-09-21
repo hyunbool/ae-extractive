@@ -1,13 +1,13 @@
 from __future__ import unicode_literals, print_function, division
-import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
 from dataset import *
-from utils import *
+from util import *
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
+MAX_LENGTH = 10
 
 class EncoderRNN(nn.Module):
     def __init__(self, input_size, hidden_size):
@@ -38,7 +38,6 @@ class DecoderRNN(nn.Module):
         self.softmax = nn.LogSoftmax(dim=1)
 
     def forward(self, input, hidden):
-        print(input)
         output = self.embedding(input).view(1, 1, -1)
         output = F.relu(output)
         output, hidden = self.gru(output, hidden)
@@ -49,38 +48,54 @@ class DecoderRNN(nn.Module):
         return torch.zeros(1, 1, self.hidden_size, device=device)
 
 
-class AttnDecoderRNN(nn.Module):
-    def __init__(self, hidden_size, output_size, dropout_p=0.1, max_length=MAX_LENGTH):
-        super(AttnDecoderRNN, self).__init__()
-        self.hidden_size = hidden_size
-        self.output_size = output_size
-        self.dropout_p = dropout_p
-        self.max_length = max_length
+class Seq2Seq(nn.Module):
+    def __init__(self, encoder, decoder, encoder_optimizer, decoder_optimizer):
+        super(Seq2Seq, self).__init__()
 
-        self.embedding = nn.Embedding(self.output_size, self.hidden_size)
-        self.attn = nn.Linear(self.hidden_size * 2, self.max_length)
-        self.attn_combine = nn.Linear(self.hidden_size * 2, self.hidden_size)
-        self.dropout = nn.Dropout(self.dropout_p)
-        self.gru = nn.GRU(self.hidden_size, self.hidden_size)
-        self.out = nn.Linear(self.hidden_size, self.output_size)
+        self.encoder = encoder
+        self.decoder = decoder
+        self.encoder_optimizer = encoder_optimizer
+        self.decoder_optimizer = decoder_optimizer
+        self.device = device
 
-    def forward(self, input, hidden, encoder_outputs):
-        embedded = self.embedding(input).view(1, 1, -1)
-        embedded = self.dropout(embedded)
+    def forward(self, src, trg, criterion, max_length=MAX_LENGTH):
 
-        attn_weights = F.softmax(
-            self.attn(torch.cat((embedded[0], hidden[0]), 1)), dim=1)
-        attn_applied = torch.bmm(attn_weights.unsqueeze(0),
-                                 encoder_outputs.unsqueeze(0))
 
-        output = torch.cat((embedded[0], attn_applied[0]), 1)
-        output = self.attn_combine(output).unsqueeze(0)
+        encoder_hidden = self.encoder.initHidden()
 
-        output = F.relu(output)
-        output, hidden = self.gru(output, hidden)
+        self.encoder_optimizer.zero_grad()
+        self.decoder_optimizer.zero_grad()
 
-        output = F.log_softmax(self.out(output[0]), dim=1)
-        return output, hidden, attn_weights
+        input_length = src.size(0)
+        target_length = trg.size(0)
+
+        encoder_outputs = torch.zeros(max_length, self.encoder.hidden_size, device=device)
+
+        loss = 0
+
+        for ei in range(input_length):
+            encoder_output, encoder_hidden = self.encoder(src[ei], encoder_hidden)
+            encoder_outputs[ei] = encoder_output[0, 0]
+
+        decoder_input = torch.tensor([[SOS_token]], device=device)
+        decoder_hidden = encoder_hidden
+
+        for di in range(target_length):
+            decoder_output, decoder_hidden = self.decoder(decoder_input, decoder_hidden)
+            topv, topi = decoder_output.topk(1)
+            decoder_input = topi.squeeze().detach()  # 입력으로 사용할 부분을 히스토리에서 분리
+
+            loss += criterion(decoder_output, trg[di])
+            if decoder_input.item() == EOS_token:
+                break
+
+        loss.backward()
+
+        self.encoder_optimizer.step()
+        self.decoder_optimizer.step()
+
+        return loss.item() / target_length
 
     def initHidden(self):
         return torch.zeros(1, 1, self.hidden_size, device=device)
+
