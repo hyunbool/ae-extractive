@@ -1,3 +1,5 @@
+# ref: https://github.com/spro/practical-pytorch/blob/master/seq2seq-translation/seq2seq-translation-batched.ipynb
+
 from torch import optim
 from model import *
 
