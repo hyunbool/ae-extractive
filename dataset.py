@@ -2,34 +2,26 @@ from io import open
 import unicodedata
 import re
 
-SOS_token = 0
-EOS_token = 1
+PAD_token = 0
+SOS_token = 1
+EOS_token = 2
 
-MAX_LENGTH = 10
-
-eng_prefixes = (
-    "i am ", "i m ",
-    "he is", "he s ",
-    "she is", "she s ",
-    "you are", "you re ",
-    "we are", "we re ",
-    "they are", "they re "
-)
-
+MIN_LENGTH = 3
+MAX_LENGTH = 25
 
 class Lang:
     def __init__(self):
-        #self.name = name
+        self.trimmed = False
         self.word2index = {}
         self.word2count = {}
-        self.index2word = {0: "SOS", 1: "EOS"}
-        self.n_words = 2  # SOS 와 EOS 포함
+        self.index2word = {0: "PAD", 1: "SOS", 2: "EOS"}
+        self.n_words = 3  # Count default tokens
 
-    def addSentence(self, sentence):
+    def index_words(self, sentence):
         for word in sentence.split(' '):
-            self.addWord(word)
+            self.index_word(word)
 
-    def addWord(self, word):
+    def index_word(self, word):
         if word not in self.word2index:
             self.word2index[word] = self.n_words
             self.word2count[word] = 1
@@ -38,59 +30,78 @@ class Lang:
         else:
             self.word2count[word] += 1
 
+    # Remove words below a certain count threshold
+    def trim(self, min_count):
+        if self.trimmed: return
+        self.trimmed = True
 
-# 유니 코드 문자열을 일반 ASCII로 변환하십시오.
-# https://stackoverflow.com/a/518232/2809427
-def unicodeToAscii(s):
+        keep_words = []
+
+        for k, v in self.word2count.items():
+            if v >= min_count:
+                keep_words.append(k)
+
+        print('keep_words %s / %s = %.4f' % (
+            len(keep_words), len(self.word2index), len(keep_words) / len(self.word2index)
+        ))
+
+        # Reinitialize dictionaries
+        self.word2index = {}
+        self.word2count = {}
+        self.index2word = {0: "PAD", 1: "SOS", 2: "EOS"}
+        self.n_words = 3  # Count default tokens
+
+        for word in keep_words:
+            self.index_word(word)
+
+
+# Turn a Unicode string to plain ASCII, thanks to http://stackoverflow.com/a/518232/2809427
+def unicode_to_ascii(s):
     return ''.join(
         c for c in unicodedata.normalize('NFD', s)
         if unicodedata.category(c) != 'Mn'
     )
 
-# 소문자, 다듬기, 그리고 문자가 아닌 문자 제거
-def normalizeString(s):
-    s = unicodeToAscii(s.lower().strip())
-    s = re.sub(r"([.!?])", r" \1", s)
-    s = re.sub(r"[^a-zA-Z.!?]+", r" ", s)
+# Lowercase, trim, and remove non-letter characters
+def normalize_string(s):
+    s = unicode_to_ascii(s.lower().strip())
+    s = re.sub(r"([,.!?])", r" \1 ", s)
+    s = re.sub(r"[^a-zA-Z,.!?]+", r" ", s)
+    s = re.sub(r"\s+", r" ", s).strip()
     return s
 
-def readLangs(path):
+def read_langs(path):
     print("Reading lines...")
 
-    # 파일을 읽고 줄로 분리
-    lines = open(path, encoding='utf-8').\
-        read().strip().split('\n')
+    lines = open(path).read().strip().split('\n')
 
-    # 모든 줄을 쌍으로 분리하고 정규화
-    pairs = [[normalizeString(s) for s in l.split('\t')][0] for l in lines]
-    pairs = [[s, s] for s in pairs]
+    # Split every line into pairs and normalize
+    pairs = [[normalize_string(s) for s in l.split('\t')] for l in lines]
 
+    print(pairs[:10])
     lang = Lang()
 
     return lang, pairs
 
-
-def filterPair(p):
-    return len(p[0].split(' ')) < MAX_LENGTH and p[0].startswith(eng_prefixes)
-
-
-def filterPairs(pairs):
-    return [pair for pair in pairs if filterPair(pair)]
-
-def prepareData(path):
-    lang, pairs = readLangs(path)
-    print("Read %s sentence pairs" % len(pairs))
-    pairs = filterPairs(pairs)
-    print("Trimmed to %s sentence pairs" % len(pairs))
-    print("Counting words...")
+def filter_pairs(pairs):
+    filtered_pairs = []
     for pair in pairs:
-        lang.addSentence(pair[0])
-    print("Counted words:")
-    print(lang.n_words)
+        if len(pair[0]) >= MIN_LENGTH and len(pair[0]) <= MAX_LENGTH:
+                filtered_pairs.append(pair)
+    return filtered_pairs
 
-    half_sent = int(len(pairs) / 2)
 
-    grouped = [[pairs[2*i][0], pairs[2*i+1][0]] for i in range((half_sent))]
-    grouped = [[s, s] for s in grouped]
+def prepare_data(path):
+    lang, pairs = read_langs(path)
+    print("Read %d sentence pairs" % len(pairs))
 
-    return lang, pairs, grouped
+    pairs = filter_pairs(pairs)
+    print("Filtered to %d pairs" % len(pairs))
+
+    print("Indexing words...")
+    for pair in pairs:
+        lang.index_words(pair[0])
+
+    print('Indexed %d words in input languag' % (lang.n_words))
+
+    return lang, pairs
