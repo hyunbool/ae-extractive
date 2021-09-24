@@ -71,7 +71,7 @@ def train(input_batches, input_lengths, target_batches, target_lengths, encoder,
     encoder_optimizer.step()
     decoder_optimizer.step()
 
-    return loss.data[0], ec, dc
+    return loss.data, ec, dc
 
 
 def evaluate(encoder, decoder, input_seq, lang, max_length=MAX_LENGTH):
@@ -184,9 +184,8 @@ def main():
 
     # Keep track of time elapsed and running averages
     start = time.time()
-    plot_losses = []
+
     print_loss_total = 0  # Reset every print_every
-    plot_loss_total = 0  # Reset every plot_every
 
     # Begin!
     ecs = []
@@ -211,17 +210,9 @@ def main():
 
         # Keep track of loss
         print_loss_total += loss
-        plot_loss_total += loss
         eca += ec
         dca += dc
 
-
-        if epoch % print_every == 0:
-            print_loss_avg = print_loss_total / print_every
-            print_loss_total = 0
-            print_summary = '%s (%d %d%%) %.4f' % (
-            time_since(start, epoch / n_epochs), epoch, epoch / n_epochs * 100, print_loss_avg)
-            print(print_summary)
 
         if epoch % evaluate_every == 0:
             evaluate_randomly()
