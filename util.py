@@ -24,34 +24,6 @@ USE_CUDA = False
 
 
 
-def show_plot_visdom():
-    buf = io.BytesIO()
-    plt.savefig(buf)
-    buf.seek(0)
-    attn_win = 'attention (%s)' % hostname
-    vis.image(torchvision.transforms.ToTensor()(Image.open(buf)), win=attn_win, opts={'title': attn_win})
-
-
-def show_attention(input_sentence, output_words, attentions):
-    # Set up figure with colorbar
-    fig = plt.figure()
-    ax = fig.add_subplot(111)
-    cax = ax.matshow(attentions.numpy(), cmap='bone')
-    fig.colorbar(cax)
-
-    # Set up axes
-    ax.set_xticklabels([''] + input_sentence.split(' ') + ['<EOS>'], rotation=90)
-    ax.set_yticklabels([''] + output_words)
-
-    # Show label at every tick
-    ax.xaxis.set_major_locator(ticker.MultipleLocator(1))
-    ax.yaxis.set_major_locator(ticker.MultipleLocator(1))
-
-    show_plot_visdom()
-    plt.show()
-    plt.close()
-
-
 def evaluate_and_show_attention(input_sentence, target_sentence=None):
     output_words, attentions = evaluate(input_sentence)
     output_sentence = ' '.join(output_words)
@@ -60,17 +32,19 @@ def evaluate_and_show_attention(input_sentence, target_sentence=None):
         print('=', target_sentence)
     print('<', output_sentence)
 
-    show_attention(input_sentence, output_words, attentions)
-
-    # Show input, target, output text in visdom
-    win = 'evaluted (%s)' % hostname
     text = '<p>&gt; %s</p><p>= %s</p><p>&lt; %s</p>' % (input_sentence, target_sentence, output_sentence)
-    vis.text(text, win=win, opts={'title': win})
+    print(text)
 
 
 # Return a list of indexes, one for each word in the sentence, plus EOS
 def indexes_from_sentence(lang, sentence):
-    return [lang.word2index[word] for word in sentence.split(' ')] + [EOS_token]
+    tmp = list()
+    for sent in sentence:
+        tmp.append([lang.word2index[word] for word in sent.split(' ')] + [EOS_token])
+
+    return tmp
+
+
 
 # Pad a with the PAD symbol
 def pad_seq(seq, max_length):
@@ -83,31 +57,41 @@ def random_batch(batch_size, pairs, lang):
     target_seqs = []
     doc_lens = []
 
+
     # Choose random pairs
     for i in range(batch_size):
         pair = random.choice(pairs)
         input_seqs.append(indexes_from_sentence(lang, pair[0]))
         target_seqs.append(indexes_from_sentence(lang, pair[1]))
 
-    #print("input_seqs:", str(input_seqs[:10]))
-
     # Zip into pairs, sort by length (descending), unzip
-    seq_pairs = sorted(zip(input_seqs, target_seqs), key=lambda p: len(p[0]), reverse=True)
+    seq_pairs = sorted(zip(input_seqs, target_seqs), key=lambda p: len(p[0][0]), reverse=True)
     input_seqs, target_seqs = zip(*seq_pairs)
 
     # For input and target sequences, get array of lengths and pad with 0s to max length
-    input_lengths = [len(s) for s in input_seqs]
-    input_padded = [pad_seq(s, max(input_lengths)) for s in input_seqs]
-    target_lengths = [len(s) for s in target_seqs]
-    target_padded = [pad_seq(s, max(target_lengths)) for s in target_seqs]
+    input_lengths = list()
+    for seqs in input_seqs:
+        input_lengths.append([len(s) for s in seqs])
+
+    max_length = 0
+    for i in input_lengths:
+        tmp = max(i)
+        if tmp > max_length:
+            max_length = tmp
+
+    input_padded = list()
+    for i, seqs in enumerate(input_seqs):
+        tmp = [pad_seq(s, max_length) for s in seqs]
+        input_padded.append(tmp)
+
+
+    target_lengths = input_lengths
+    target_padded = input_padded
 
     # Turn padded arrays into (batch_size x max_len) tensors, transpose into (max_len x batch_size)
     input_var = Variable(torch.LongTensor(input_padded)).transpose(0, 1)
     target_var = Variable(torch.LongTensor(target_padded)).transpose(0, 1)
 
-    if USE_CUDA:
-        input_var = input_var.cuda()
-        target_var = target_var.cuda()
 
     return input_var, input_lengths, target_var, target_lengths
 
@@ -138,7 +122,7 @@ def sequence_mask(sequence_length, max_len=None):
     return seq_range_expand < seq_length_expand
 
 def masked_cross_entropy(logits, target, length):
-    length = Variable(torch.LongTensor(length)).cuda()
+    length = Variable(torch.LongTensor(length))
 
     """
     Args:

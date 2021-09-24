@@ -3,7 +3,7 @@
 from torch import optim
 from model import *
 
-USE_CUDA = True
+USE_CUDA = False
 teacher_forcing_ratio = 0.5
 
 attn_model = 'dot'
