@@ -3,15 +3,24 @@
 from torch import optim
 from model import *
 
-USE_CUDA = False
+USE_CUDA=True
+# set cuda device and seed
+if USE_CUDA:
+    torch.cuda.set_device(0)
+torch.cuda.manual_seed(1)
+
+import os
+os.environ['CUDA_LAUNCH_BLOCKING'] = "1"
+os.environ["CUDA_VISIBLE_DEVICES"] = "0"
+
 teacher_forcing_ratio = 0.5
 
 attn_model = 'dot'
 hidden_size = 500
 n_layers = 2
 dropout = 0.1
-batch_size = 100
 batch_size = 50
+
 
 # Configure training/optimization
 clip = 50.0
@@ -20,9 +29,10 @@ learning_rate = 0.0001
 decoder_learning_ratio = 5.0
 n_epochs = 50000
 
-plot_every = 20
 print_every = 100
-evaluate_every = 1000
+evaluate_every = 100
+
+
 
 def train(input_batches, input_lengths, target_batches, target_lengths, encoder, decoder, encoder_optimizer,
           decoder_optimizer, criterion, max_length=MAX_LENGTH):
@@ -71,88 +81,86 @@ def train(input_batches, input_lengths, target_batches, target_lengths, encoder,
     encoder_optimizer.step()
     decoder_optimizer.step()
 
-    return loss.data[0], ec, dc
+    return loss.data, ec, dc
 
 
-def evaluate(encoder, decoder, input_seq, lang, max_length=MAX_LENGTH):
-    input_lengths = [len(input_seq)]
-    input_seqs = [indexes_from_sentence(lang, input_seq)]
-    input_batches = Variable(torch.LongTensor(input_seqs), volatile=True).transpose(0, 1)
+def evaluate(input_batches, input_lengths, target_batches, target_lengths, encoder, decoder, criterion, max_length=MAX_LENGTH):
+    with torch.no_grad():
+        loss = 0  # Added onto for each word
 
-    if USE_CUDA:
-        input_batches = input_batches.cuda()
+        # Run words through encoder
+        encoder_outputs, encoder_hidden = encoder(input_batches, input_lengths, None)
 
-    # Set to not-training mode to disable dropout
-    encoder.train(False)
-    decoder.train(False)
+        # Prepare input and output variables
+        decoder_input = Variable(torch.LongTensor([SOS_token] * batch_size))
+        decoder_hidden = encoder_hidden[:decoder.n_layers]  # Use last (forward) hidden state from encoder
 
-    # Run through encoder
-    encoder_outputs, encoder_hidden = encoder(input_batches, input_lengths, None)
+        max_target_length = max(target_lengths)
+        all_decoder_outputs = Variable(torch.zeros(max_target_length, batch_size, decoder.output_size))
 
-    # Create starting vectors for decoder
-    decoder_input = Variable(torch.LongTensor([SOS_token]), volatile=True)  # SOS
-    decoder_hidden = encoder_hidden[:decoder.n_layers]  # Use last (forward) hidden state from encoder
+        # Move new Variables to CUDA
+        if USE_CUDA:
+            decoder_input = decoder_input.cuda()
+            all_decoder_outputs = all_decoder_outputs.cuda()
 
-    if USE_CUDA:
-        decoder_input = decoder_input.cuda()
+        # Run through decoder one time step at a time
+        for t in range(max_target_length):
+            decoder_output, decoder_hidden, decoder_attn = decoder(
+                decoder_input, decoder_hidden, encoder_outputs
+            )
 
-    # Store output words and attention states
-    decoded_words = []
-    decoder_attentions = torch.zeros(max_length + 1, max_length + 1)
+            all_decoder_outputs[t] = decoder_output
+            decoder_input = target_batches[t]  # Next input is current target
 
-    # Run through decoder
-    for di in range(max_length):
-        decoder_output, decoder_hidden, decoder_attention = decoder(
-            decoder_input, decoder_hidden, encoder_outputs
+        # Loss calculation and backpropagation
+        loss = masked_cross_entropy(
+            all_decoder_outputs.transpose(0, 1).contiguous(),  # -> batch x seq
+            target_batches.transpose(0, 1).contiguous(),  # -> batch x seq
+            target_lengths
         )
-        decoder_attentions[di, :decoder_attention.size(2)] += decoder_attention.squeeze(0).squeeze(0).cpu().data
 
-        # Choose top word from output
-        topv, topi = decoder_output.data.topk(1)
-        ni = topi[0][0]
-        if ni == EOS_token:
-            decoded_words.append('<EOS>')
-            break
-        else:
-            decoded_words.append(lang.index2word[ni])
 
-        # Next input is chosen word
-        decoder_input = Variable(torch.LongTensor([ni]))
-        if USE_CUDA: decoder_input = decoder_input.cuda()
+        return loss.data
 
-    # Set back to training mode
-    encoder.train(True)
-    decoder.train(True)
 
-    return decoded_words, decoder_attentions[:di + 1, :len(encoder_outputs)]
-
-def evaluate_randomly():
+def evaluate_randomly(encoder, decoder, pairs, lang):
     [input_sentence, target_sentence] = random.choice(pairs)
-    evaluate_and_show_attention(input_sentence, target_sentence)
+    output_words, _ = evaluate(encoder, decoder, input_sentence, lang)
+
+    output_sentence = ' '.join(output_words)
+    print('>', input_sentence)
+    if target_sentence is not None:
+        print('=', target_sentence)
+    print('<', output_sentence)
+
 
 
 def main():
-    lang, pairs = prepare_data("data/data.txt")
 
+    lang, pairs = prepare_data("data/data.txt")
+    train_lang, train_pairs = prepare_data("data/train.txt")
+    test_lang, test_pairs = prepare_data("data/test.txt")
     MIN_COUNT = 5
 
-    lang.trim(MIN_COUNT)
+
+    train_lang.trim(MIN_COUNT)
+    test_lang.trim(MIN_COUNT)
 
     keep_pairs = []
 
-    for pair in pairs:
+    for pair in train_pairs:
         input_sentence = pair[0]
         output_sentence = pair[1]
         keep_input = True
         keep_output = True
 
         for word in input_sentence.split(' '):
-            if word not in lang.word2index:
+            if word not in train_lang.word2index:
                 keep_input = False
                 break
 
         for word in output_sentence.split(' '):
-            if word not in lang.word2index:
+            if word not in train_lang.word2index:
                 keep_output = False
                 break
 
@@ -160,15 +168,38 @@ def main():
         if keep_input and keep_output:
             keep_pairs.append(pair)
 
-    print("Trimmed from %d pairs to %d, %.4f of total" % (len(pairs), len(keep_pairs), len(keep_pairs) / len(pairs)))
-    pairs = keep_pairs
+    print("Trimmed from %d pairs to %d, %.4f of total" % (len(train_pairs), len(keep_pairs), len(keep_pairs) / len(train_pairs)))
+    train_pairs = keep_pairs
 
+    keep_pairs = []
 
+    for pair in test_pairs:
+        input_sentence = pair[0]
+        output_sentence = pair[1]
+        keep_input = True
+        keep_output = True
+
+        for word in input_sentence.split(' '):
+            if word not in test_lang.word2index:
+                keep_input = False
+                break
+
+        for word in output_sentence.split(' '):
+            if word not in test_lang.word2index:
+                keep_output = False
+                break
+
+        # Remove if pair doesn't match input and output conditions
+        if keep_input and keep_output:
+            keep_pairs.append(pair)
+
+    print("Trimmed from %d pairs to %d, %.4f of total" % (len(test_pairs), len(keep_pairs), len(keep_pairs) / len(test_pairs)))
+    test_pairs = keep_pairs
 
 
     # Initialize models
-    encoder = EncoderRNN(lang.n_words, hidden_size, n_layers, dropout=dropout)
-    decoder = LuongAttnDecoderRNN(attn_model, hidden_size, lang.n_words, n_layers, dropout=dropout)
+    encoder = EncoderRNN(train_lang.n_words, hidden_size, n_layers, dropout=dropout)
+    decoder = LuongAttnDecoderRNN(attn_model, hidden_size, train_lang.n_words, n_layers, dropout=dropout)
 
     # Initialize optimizers and criterion
     encoder_optimizer = optim.Adam(encoder.parameters(), lr=learning_rate)
@@ -195,12 +226,14 @@ def main():
     dca = 0
 
     epoch = 0
-    print("pairs: ", str(pairs[:10]))
+    print("train_pairs: ", str(train_pairs[:10]))
+    print("test_pairs: ", str(test_pairs[:10]))
     while epoch < n_epochs:
         epoch += 1
 
         # Get training data for this cycle
-        input_batches, input_lengths, target_batches, target_lengths = random_batch(batch_size, pairs, lang)
+        input_batches, input_lengths, target_batches, target_lengths = random_batch(batch_size, train_pairs, train_lang)
+        test_input_batches, test_input_lengths, test_target_batches, test_target_lengths = random_batch(batch_size, test_pairs, test_lang)
 
         # Run the train function
         loss, ec, dc = train(
@@ -224,7 +257,11 @@ def main():
             print(print_summary)
 
         if epoch % evaluate_every == 0:
-            evaluate_randomly()
+            # Run the train function
+            loss = evaluate(
+                test_input_batches, test_input_lengths, test_target_batches, test_target_lengths,
+                encoder, decoder, criterion)
+            print("evaluation - epoch", epoch, " loss: ", loss.data)
 
 
 main()

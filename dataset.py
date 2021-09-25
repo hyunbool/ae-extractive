@@ -73,6 +73,21 @@ def normalize_string(s):
 def read_langs(path):
     print("Reading lines...")
 
+    """
+    with open(path) as f:
+        examples = [json.loads(line) for line in f]
+
+    sents_list = list()
+    for doc in examples:
+        sents = doc['doc'].split("\n")
+        sents = ["<sos> " + s + " <eos>" for s in sents]
+        sents = " ".join(sents)
+        sents_list.append(sents)
+
+    pairs = [normalize_string(s) for s in sents_list]
+    pairs = [[s, s] for s in pairs]
+    """
+
     lines = open(path).read().strip().split('\n')
 
     # Split every line into pairs and normalize

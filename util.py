@@ -7,9 +7,7 @@ import math
 import time
 import io
 import torchvision
-from PIL import Image
-import visdom
-vis = visdom.Visdom()
+
 
 import torch
 from torch.nn import functional
@@ -20,31 +18,19 @@ PAD_token = 0
 SOS_token = 1
 EOS_token = 2
 
-USE_CUDA = False
+USE_CUDA=True
+# set cuda device and seed
+if USE_CUDA:
+    torch.cuda.set_device(0)
+torch.cuda.manual_seed(1)
 
 
 
-def evaluate_and_show_attention(input_sentence, target_sentence=None):
-    output_words, attentions = evaluate(input_sentence)
-    output_sentence = ' '.join(output_words)
-    print('>', input_sentence)
-    if target_sentence is not None:
-        print('=', target_sentence)
-    print('<', output_sentence)
-
-    text = '<p>&gt; %s</p><p>= %s</p><p>&lt; %s</p>' % (input_sentence, target_sentence, output_sentence)
-    print(text)
 
 
 # Return a list of indexes, one for each word in the sentence, plus EOS
 def indexes_from_sentence(lang, sentence):
-    tmp = list()
-    for sent in sentence:
-        tmp.append([lang.word2index[word] for word in sent.split(' ')] + [EOS_token])
-
-    return tmp
-
-
+    return [lang.word2index[word] for word in sentence.split(' ')] + [EOS_token]
 
 # Pad a with the PAD symbol
 def pad_seq(seq, max_length):
@@ -57,41 +43,31 @@ def random_batch(batch_size, pairs, lang):
     target_seqs = []
     doc_lens = []
 
-
     # Choose random pairs
     for i in range(batch_size):
         pair = random.choice(pairs)
         input_seqs.append(indexes_from_sentence(lang, pair[0]))
         target_seqs.append(indexes_from_sentence(lang, pair[1]))
 
+    #print("input_seqs:", str(input_seqs[:10]))
+
     # Zip into pairs, sort by length (descending), unzip
-    seq_pairs = sorted(zip(input_seqs, target_seqs), key=lambda p: len(p[0][0]), reverse=True)
+    seq_pairs = sorted(zip(input_seqs, target_seqs), key=lambda p: len(p[0]), reverse=True)
     input_seqs, target_seqs = zip(*seq_pairs)
 
     # For input and target sequences, get array of lengths and pad with 0s to max length
-    input_lengths = list()
-    for seqs in input_seqs:
-        input_lengths.append([len(s) for s in seqs])
-
-    max_length = 0
-    for i in input_lengths:
-        tmp = max(i)
-        if tmp > max_length:
-            max_length = tmp
-
-    input_padded = list()
-    for i, seqs in enumerate(input_seqs):
-        tmp = [pad_seq(s, max_length) for s in seqs]
-        input_padded.append(tmp)
-
-
-    target_lengths = input_lengths
-    target_padded = input_padded
+    input_lengths = [len(s) for s in input_seqs]
+    input_padded = [pad_seq(s, max(input_lengths)) for s in input_seqs]
+    target_lengths = [len(s) for s in target_seqs]
+    target_padded = [pad_seq(s, max(target_lengths)) for s in target_seqs]
 
     # Turn padded arrays into (batch_size x max_len) tensors, transpose into (max_len x batch_size)
     input_var = Variable(torch.LongTensor(input_padded)).transpose(0, 1)
     target_var = Variable(torch.LongTensor(target_padded)).transpose(0, 1)
 
+    if USE_CUDA:
+        input_var = input_var.cuda()
+        target_var = target_var.cuda()
 
     return input_var, input_lengths, target_var, target_lengths
 
@@ -149,7 +125,8 @@ def masked_cross_entropy(logits, target, length):
     # losses: (batch, max_len)
     losses = losses_flat.view(*target.size())
     # mask: (batch, max_len)
-    mask = sequence_mask(sequence_length=length, max_len=target.size(1))
+    mask = sequence_mask(sequence_length=length, max_len=target.size(1)).cuda()
     losses = losses * mask.float()
+
     loss = losses.sum() / length.float().sum()
     return loss
