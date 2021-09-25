@@ -8,6 +8,7 @@ import time
 import io
 import torchvision
 
+
 import torch
 from torch.nn import functional
 from torch.autograd import Variable
@@ -17,7 +18,15 @@ PAD_token = 0
 SOS_token = 1
 EOS_token = 2
 
-USE_CUDA = False
+USE_CUDA=True
+# set cuda device and seed
+if USE_CUDA:
+    torch.cuda.set_device(0)
+torch.cuda.manual_seed(1)
+
+
+
+
 
 # Return a list of indexes, one for each word in the sentence, plus EOS
 def indexes_from_sentence(lang, sentence):
@@ -83,7 +92,7 @@ def sequence_mask(sequence_length, max_len=None):
     seq_range_expand = seq_range.unsqueeze(0).expand(batch_size, max_len)
     seq_range_expand = Variable(seq_range_expand)
     if sequence_length.is_cuda:
-        seq_range_expand = seq_range_expand
+        seq_range_expand = seq_range_expand.cuda()
     seq_length_expand = (sequence_length.unsqueeze(1)
                          .expand_as(seq_range_expand))
     return seq_range_expand < seq_length_expand
@@ -116,7 +125,8 @@ def masked_cross_entropy(logits, target, length):
     # losses: (batch, max_len)
     losses = losses_flat.view(*target.size())
     # mask: (batch, max_len)
-    mask = sequence_mask(sequence_length=length, max_len=target.size(1))
+    mask = sequence_mask(sequence_length=length, max_len=target.size(1)).cuda()
     losses = losses * mask.float()
+
     loss = losses.sum() / length.float().sum()
     return loss

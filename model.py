@@ -5,8 +5,6 @@ import torch.nn.functional as F
 from dataset import *
 from util import *
 
-device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-
 MAX_LENGTH = 10
 
 
@@ -129,6 +127,8 @@ class LuongAttnDecoderRNN(nn.Module):
         # Return final output, hidden state, and attention weights (for visualization)
         return output, hidden, attn_weights
 
+"""
+"""
 class Seq2Seq(nn.Module):
     def __init__(self, encoder, decoder, encoder_optimizer, decoder_optimizer):
         super(Seq2Seq, self).__init__()
