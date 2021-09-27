@@ -1,80 +1,124 @@
-from __future__ import unicode_literals, print_function, division
-import random
+# ref: https://github.com/spro/practical-pytorch/blob/master/seq2seq-translation/seq2seq-translation-batched.ipynb
+
+from torch import optim
 from model import *
-device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+import os
+from utils import *
 
-"""
-def evaluate(encoder, decoder, sentence, lang, max_length=MAX_LENGTH):
+os.environ['CUDA_LAUNCH_BLOCKING'] = "1"
+os.environ["CUDA_VISIBLE_DEVICES"] = "0"
+
+USE_CUDA=True
+# set cuda device and seed
+if USE_CUDA:
+    torch.cuda.set_device(0)
+torch.cuda.manual_seed(1)
+
+
+
+teacher_forcing_ratio = 0.5
+
+attn_model = 'dot'
+hidden_size = 500
+n_layers = 2
+dropout = 0.1
+batch_size = 50
+
+
+# Configure training/optimization
+
+teacher_forcing_ratio = 0.5
+learning_rate = 0.0001
+decoder_learning_ratio = 5.0
+n_epochs = 50000
+
+print_every = 100
+evaluate_every = 100
+
+patience = 20
+
+def evaluate(input_batches, input_lengths, target_batches, target_lengths, seq2seq, criterion, max_length=MAX_LENGTH):
     with torch.no_grad():
-        input_tensor = tensorFromSentence(lang, sentence)
-        input_length = input_tensor.size()[0]
-        encoder_hidden = encoder.initHidden()
+        decoder_output, loss, _, _ = seq2seq(input_batches, input_lengths, target_batches, target_lengths, batch_size, criterion)
 
-        encoder_outputs = torch.zeros(max_length, encoder.hidden_size, device=device)
+        return loss.data
 
-        for ei in range(input_length):
-            encoder_output, encoder_hidden = encoder(input_tensor[ei],
-                                                     encoder_hidden)
-            encoder_outputs[ei] += encoder_output[0, 0]
 
-        decoder_input = torch.tensor([[SOS_token]], device=device)  # SOS
 
-        decoder_hidden = encoder_hidden
+def main():
 
-        decoded_words = []
-        decoder_attentions = torch.zeros(max_length, max_length)
+    test_lang, test_pairs = prepare_data("data/valid.txt")
+    MIN_COUNT = 5
 
+    test_lang.trim(MIN_COUNT)
+
+    keep_pairs = []
+
+    for pair in test_pairs:
+        input_sentence = pair[0]
+        output_sentence = pair[1]
+        keep_input = True
+        keep_output = True
+
+        for word in input_sentence.split(' '):
+            if word not in test_lang.word2index:
+                keep_input = False
+                break
+
+        for word in output_sentence.split(' '):
+            if word not in test_lang.word2index:
+                keep_output = False
+                break
+
+        # Remove if pair doesn't match input and output conditions
+        if keep_input and keep_output:
+            keep_pairs.append(pair)
+
+    print("Trimmed from %d pairs to %d, %.4f of total" % (len(test_pairs), len(keep_pairs), len(keep_pairs) / len(test_pairs)))
+    test_pairs = keep_pairs
+
+    # Initialize models
+    encoder = EncoderRNN(test_lang.n_words, hidden_size, n_layers, dropout=dropout)
+    decoder = LuongAttnDecoderRNN(attn_model, hidden_size, test_lang.n_words, n_layers, dropout=dropout)
+
+    # Initialize optimizers and criterion
+    encoder_optimizer = optim.Adam(encoder.parameters(), lr=learning_rate)
+    decoder_optimizer = optim.Adam(decoder.parameters(), lr=learning_rate * decoder_learning_ratio)
+
+    # Move models to GPU
+    if USE_CUDA:
+        encoder.cuda()
+        decoder.cuda()
+
+    seq2seq = Seq2Seq(encoder, decoder, encoder_optimizer, decoder_optimizer)
+    seq2seq.load_state_dict(torch.load('checkpoint.pt'))
+
+    if USE_CUDA:
+        seq2seq.cuda()
+
+
+
+    if USE_CUDA:
+        seq2seq.cuda()
+
+    test_input_batches, test_input_lengths, test_target_batches, test_target_lengths = random_batch(batch_size, test_pairs, test_lang)
+    with torch.no_grad():
+        decoder_output, loss, _, _ = seq2seq(input_batches, input_lengths, target_batches, target_lengths, batch_size, criterion)
+
+    results = []
+    for t in range(batch_size):
         for di in range(max_length):
-            decoder_output, decoder_hidden, decoder_attention = decoder(
-                decoder_input, decoder_hidden, encoder_outputs)
-            decoder_attentions[di] = decoder_attention.data
-            topv, topi = decoder_output.data.topk(1)
-            if topi.item() == EOS_token:
+            decoded_words = []
+            # Choose top word from output
+            topv, topi = decoder_output[t].data.topk(1)
+            ni = topi[0][0]
+            if ni == EOS_token:
                 decoded_words.append('<EOS>')
                 break
             else:
-                decoded_words.append(lang.index2word[topi.item()])
+                decoded_words.append(lang.index2word[ni])
+        results.append(decoded_words)
 
-            decoder_input = topi.squeeze().detach()
-
-        return decoded_words, decoder_attentions[:di + 1]
-
-def evaluateRandomly(encoder, decoder, grouped, lang, n=10):
-    for i in range(n):
-        pair = random.choice(grouped)
-        print('>', pair[0])
-        print('=', pair[1])
-        output_words, attentions = evaluate(encoder, decoder, pair[0], lang)
-        output_sentence = ' '.join(output_words)
-        print('<', output_sentence)
-        print('')
-"""
-
-def main():
-    lang, pairs, grouped = prepareData("data/test.txt")
-
-    hidden_size = 256
-    learning_rate = 0.01
-
-
-    # 경로 지정
-    PATH = "state_dict_model.pt"
-
-    model = torch.load(PATH)
-
-    training_pairs = [tensorsFromPair(random.choice(grouped), lang)]
-
-    start = time.time()
-    print_loss_total = 0  # print_every 마다 초기화
-
-
-    with torch.no_grad():
-        input_tensor = training_pairs[0][0]
-        target_tensor = training_pairs[0][1]
-
-        loss = model(input_tensor, target_tensor)
-        print_loss_total += loss
-
-        print('loss: ' , print_loss_total)
+    print(results)
 
 main()
