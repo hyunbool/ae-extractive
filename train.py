@@ -36,6 +36,39 @@ print_every = 100
 evaluate_every = 100
 
 patience = 20
+MAX_LENGTH = 10
+def predict(input_batches, decoder_output, lang):
+
+    results = []
+    for t in decoder_output:
+        decoded_words = []
+        for di in t:
+            # Choose top word from output
+
+            word = di.data
+            topv, topi = word.topk(1)
+
+            ni = topi.item()
+            word = lang.index2word[ni]
+            decoded_words.append(word)
+
+        results.append(decoded_words)
+
+    inputs = list()
+    for t in input_batches:
+        words = list()
+        for i in t:
+            words.append(lang.index2word[i.item()])
+        inputs.append(words)
+
+
+    for input, output in zip(inputs, results):
+        input_sentence = ' '.join(input)
+        output_sentence = ' '.join(output)
+
+        print('>', input_sentence)
+        print('<', output_sentence)
+        print('')
 
 def evaluate(input_batches, input_lengths, target_batches, target_lengths, seq2seq, criterion, max_length=MAX_LENGTH):
     with torch.no_grad():
@@ -43,19 +76,6 @@ def evaluate(input_batches, input_lengths, target_batches, target_lengths, seq2s
 
 
         return decoder_output, loss.data
-
-
-def evaluate_randomly(encoder, decoder, pairs, lang):
-    [input_sentence, target_sentence] = random.choice(pairs)
-    output_words, _ = evaluate(encoder, decoder, input_sentence, lang)
-
-    output_sentence = ' '.join(output_words)
-    print('>', input_sentence)
-    if target_sentence is not None:
-        print('=', target_sentence)
-    print('<', output_sentence)
-
-
 
 def main():
 
@@ -178,8 +198,9 @@ def main():
 
     for epoch in range(1, n_epochs + 1):
         # Get training data for this cycle
-        input_batches, input_lengths, target_batches, target_lengths = random_batch(batch_size, train_pairs, lang)
-        test_input_batches, test_input_lengths, test_target_batches, test_target_lengths = random_batch(batch_size, test_pairs, lang)
+        input_batches, input_lengths, _, target_batches, target_lengths = random_batch(batch_size, train_pairs, lang)
+
+        test_input_batches, test_input_lengths, input_origin, test_target_batches, test_target_lengths = random_batch(batch_size, test_pairs, lang)
 
         # Run the train function
         _, loss, ec, dc = seq2seq(input_batches, input_lengths, target_batches, target_lengths, batch_size, criterion)
@@ -203,22 +224,11 @@ def main():
             print(print_summary)
             print("evaluation - epoch", epoch, " loss: ", val_loss)
 
-            print(decoder_output)
-            results = []
-            for t in decoder_output:
-                for di in range(MAX_LENGTH):
-                    decoded_words = []
-                    # Choose top word from output
-                    topv, topi = t.data.topk(1)
-                    ni = topi[0][0].item()
-                    print(ni)
-                    if ni == EOS_token:
-                        decoded_words.append('<EOS>')
-                        break
-                    else:
-                        decoded_words.append(lang.index2word[ni])
-                results.append(decoded_words)
-            print(results)
+
+            original = test_input_batches.transpose(1, 0)
+            decoder_output = decoder_output.transpose(1, 0)
+            #predict(original, decoder_output, lang)
+
 
             # early_stopping는 validation loss가 감소하였는지 확인이 필요하며,
             # 만약 감소하였을경우 현제 모델을 checkpoint로 만든다.

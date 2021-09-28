@@ -94,7 +94,6 @@ def random_batch(batch_size, pairs, lang):
         input_seqs.append(indexes_from_sentence(lang, pair[0]))
         target_seqs.append(indexes_from_sentence(lang, pair[1]))
 
-    #print("input_seqs:", str(input_seqs[:10]))
 
     # Zip into pairs, sort by length (descending), unzip
     seq_pairs = sorted(zip(input_seqs, target_seqs), key=lambda p: len(p[0]), reverse=True)
@@ -114,7 +113,7 @@ def random_batch(batch_size, pairs, lang):
         input_var = input_var.cuda()
         target_var = target_var.cuda()
 
-    return input_var, input_lengths, target_var, target_lengths
+    return input_var, input_lengths, input_padded, target_var, target_lengths
 
 def as_minutes(s):
     m = math.floor(s / 60)
