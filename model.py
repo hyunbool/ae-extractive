@@ -6,7 +6,7 @@ from dataset import *
 from util import *
 
 MAX_LENGTH = 10
-clip = 50.0
+
 
 class EncoderRNN(nn.Module):
     def __init__(self, input_size, hidden_size, n_layers=1, dropout=0.1):
@@ -137,55 +137,46 @@ class Seq2Seq(nn.Module):
         self.decoder = decoder
         self.encoder_optimizer = encoder_optimizer
         self.decoder_optimizer = decoder_optimizer
+        self.device = device
 
-    def forward(self, input_batches, input_lengths, target_batches, target_lengths, batch_size, criterion, max_length=MAX_LENGTH):
+    def forward(self, src, trg, criterion, max_length=MAX_LENGTH):
+
+
+        encoder_hidden = self.encoder.initHidden()
 
         self.encoder_optimizer.zero_grad()
         self.decoder_optimizer.zero_grad()
 
-        loss = 0  # Added onto for each word
+        input_length = src.size(0)
+        target_length = trg.size(0)
 
-        # Run words through encoder
-        encoder_outputs, encoder_hidden = self.encoder(input_batches, input_lengths, None)
+        encoder_outputs = torch.zeros(max_length, self.encoder.hidden_size, device=device)
 
-        # Prepare input and output variables
-        decoder_input = Variable(torch.LongTensor([SOS_token] * batch_size))
-        decoder_hidden = encoder_hidden[:self.decoder.n_layers]  # Use last (forward) hidden state from encoder
+        loss = 0
 
-        max_target_length = max(target_lengths)
-        all_decoder_outputs = Variable(torch.zeros(max_target_length, batch_size, self.decoder.output_size))
+        for ei in range(input_length):
+            encoder_output, encoder_hidden = self.encoder(src[ei], encoder_hidden)
+            encoder_outputs[ei] = encoder_output[0, 0]
 
-        # Move new Variables to CUDA
-        if USE_CUDA:
-            decoder_input = decoder_input.cuda()
-            all_decoder_outputs = all_decoder_outputs.cuda()
+        decoder_input = torch.tensor([[SOS_token]], device=device)
+        decoder_hidden = encoder_hidden
 
-        # Run through decoder one time step at a time
-        for t in range(max_target_length):
-            decoder_output, decoder_hidden, decoder_attn = self.decoder(
-                decoder_input, decoder_hidden, encoder_outputs
-            )
+        for di in range(target_length):
+            decoder_output, decoder_hidden = self.decoder(decoder_input, decoder_hidden)
+            topv, topi = decoder_output.topk(1)
+            decoder_input = topi.squeeze().detach()  # 입력으로 사용할 부분을 히스토리에서 분리
 
-            all_decoder_outputs[t] = decoder_output
-            decoder_input = target_batches[t]  # Next input is current target
+            loss += criterion(decoder_output, trg[di])
+            if decoder_input.item() == EOS_token:
+                break
 
-        # Loss calculation and backpropagation
-        loss = masked_cross_entropy(
-            all_decoder_outputs.transpose(0, 1).contiguous(),  # -> batch x seq
-            target_batches.transpose(0, 1).contiguous(),  # -> batch x seq
-            target_lengths
-        )
-        #loss.backward()
+        loss.backward()
 
-        # Clip gradient norms
-        ec = torch.nn.utils.clip_grad_norm(self.encoder.parameters(), clip)
-        dc = torch.nn.utils.clip_grad_norm(self.decoder.parameters(), clip)
-
-        # Update parameters with optimizers
         self.encoder_optimizer.step()
         self.decoder_optimizer.step()
 
-        return all_decoder_outputs, loss.data, ec, dc
+        return loss.item() / target_length
 
-
+    def initHidden(self):
+        return torch.zeros(1, 1, self.hidden_size, device=device)
 
